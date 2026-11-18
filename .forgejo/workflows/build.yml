@@ -25,9 +25,9 @@ jobs:
 
       - name: Install BlueBuild
         run: |
-          docker create --name blue-build-installer ghcr.io/blue-build/cli:v0.9-installer
-          sudo docker cp blue-build-installer:/out/bluebuild /usr/bin/bluebuild
-          docker rm blue-build-installer
+          podman create --name blue-build-installer ghcr.io/blue-build/cli:v0.9-installer
+          podman cp blue-build-installer:/out/bluebuild /usr/bin/bluebuild
+          podman rm blue-build-installer
           bluebuild --version
 
       - name: Generate Containerfile from recipe
@@ -37,32 +37,30 @@ jobs:
           fi
           bluebuild generate ./recipes/recipe.yml -o Containerfile
 
-      - name: Log in to registry
-        if: forgejo.event_name != 'pull_request'
-        uses: https://data.forgejo.org/docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ${{ forgejo.server_url }}
-          username: ${{ forgejo.repository_owner }}
-          password: ${{ secrets.PACKAGE_TOKEN }}
-
-      - name: Build and push
+      - name: Build
         id: build
-        uses: https://data.forgejo.org/docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: https://data.forgejo.org/redhat-actions/buildah-build@719e3c40d8af9790c23eca13f7daa339f2867034 # v3.1.0
         with:
-          context: .
-          file: Containerfile
+          image: silverblue
+          tags: latest
+          containerfiles: ./Containerfile
           platforms: linux/amd64
-          push: ${{ forgejo.event_name != 'pull_request' }}
-          provenance: false
-          sbom: false
+          layers: true
           build-args: |
             IMAGE_REGISTRY=${{ vars.REGISTRY }}/${{ forgejo.repository_owner }}
-          tags: ${{ env.IMAGE }}:latest
+          extra-args: |
+            --log-level=debug
 
-      # The cosign installer needs envsubst
-      - name: Install envsubst
+      - name: Push
+        id: push
         if: forgejo.event_name != 'pull_request'
-        run: apt-get update -qq && apt-get install -y -qq gettext-base
+        uses: https://data.forgejo.org/redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
+        with:
+          image: ${{ steps.build.outputs.image }}
+          tags: ${{ steps.build.outputs.tags }}
+          registry: ${{ vars.REGISTRY }}/${{ forgejo.repository_owner }}
+          username: ${{ forgejo.repository_owner }}
+          password: ${{ secrets.PACKAGE_TOKEN }}
 
       - name: Install cosign
         if: forgejo.event_name != 'pull_request'
@@ -70,11 +68,15 @@ jobs:
         with:
           cosign-release: v3.1.4
 
+      - name: Log in to registry for cosign
+        if: forgejo.event_name != 'pull_request'
+        run: cosign login ${{ vars.REGISTRY }} -u ${{ forgejo.repository_owner }} -p ${{ secrets.PACKAGE_TOKEN }}
+
       - name: Sign image
         if: forgejo.event_name != 'pull_request'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           # Cosign prompts when this is unset
           COSIGN_PASSWORD: ""
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: cosign sign --yes --new-bundle-format=false --use-signing-config=false --key env://COSIGN_PRIVATE_KEY "${IMAGE}@${DIGEST}"
