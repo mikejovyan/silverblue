@@ -18,9 +18,16 @@ concurrency:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    env:
-      IMAGE: ${{ vars.REGISTRY }}/${{ forgejo.repository_owner }}/silverblue
     steps:
+      - name: Compute registry namespace
+        run: |
+          SERVER_URL="${{ forgejo.server_url }}"
+          REGISTRY="${SERVER_URL#*://}"
+          REPOSITORY="${{ forgejo.repository }}"
+          echo "REGISTRY=$REGISTRY" >> "$GITHUB_ENV"
+          echo "REGISTRY_NAMESPACE=$REGISTRY/${{ forgejo.repository_owner }}" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=${REPOSITORY#*/}" >> "$GITHUB_ENV"
+
       - uses: https://data.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install BlueBuild
@@ -32,7 +39,7 @@ jobs:
 
       - name: Generate Containerfile from recipe
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+          if [ "${{ forgejo.event_name == 'schedule' }}" = "true" ]; then
             unset GITHUB_ACTIONS
           fi
           bluebuild generate ./recipes/recipe.yml -o Containerfile
@@ -41,15 +48,13 @@ jobs:
         id: build
         uses: https://data.forgejo.org/redhat-actions/buildah-build@719e3c40d8af9790c23eca13f7daa339f2867034 # v3.1.0
         with:
-          image: silverblue
+          image: ${{ env.IMAGE_NAME }}
           tags: latest
           containerfiles: ./Containerfile
           platforms: linux/amd64
           layers: true
           build-args: |
-            IMAGE_REGISTRY=${{ vars.REGISTRY }}/${{ forgejo.repository_owner }}
-          extra-args: |
-            --log-level=debug
+            IMAGE_REGISTRY=${{ env.REGISTRY_NAMESPACE }}
 
       - name: Push
         id: push
@@ -58,7 +63,7 @@ jobs:
         with:
           image: ${{ steps.build.outputs.image }}
           tags: ${{ steps.build.outputs.tags }}
-          registry: ${{ vars.REGISTRY }}/${{ forgejo.repository_owner }}
+          registry: ${{ env.REGISTRY_NAMESPACE }}
           username: ${{ forgejo.repository_owner }}
           password: ${{ secrets.PACKAGE_TOKEN }}
 
@@ -70,13 +75,23 @@ jobs:
 
       - name: Log in to registry for cosign
         if: forgejo.event_name != 'pull_request'
-        run: cosign login ${{ vars.REGISTRY }} -u ${{ forgejo.repository_owner }} -p ${{ secrets.PACKAGE_TOKEN }}
+        run: |
+          cosign login \
+            --username ${{ forgejo.repository_owner }} \
+            --password ${{ secrets.PACKAGE_TOKEN }} \
+            ${{ env.REGISTRY }}
 
       - name: Sign image
         if: forgejo.event_name != 'pull_request'
         env:
+          IMAGE_REF: ${{ env.REGISTRY_NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           # Cosign prompts when this is unset
           COSIGN_PASSWORD: ""
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: cosign sign --yes --new-bundle-format=false --use-signing-config=false --key env://COSIGN_PRIVATE_KEY "${IMAGE}@${DIGEST}"
+        run: |
+          cosign sign \
+            --yes \
+            --new-bundle-format=false \
+            --use-signing-config=false \
+            --key env://COSIGN_PRIVATE_KEY \
+            "${IMAGE_REF}"
