@@ -4,7 +4,7 @@ Custom [Fedora Silverblue](https://fedoraproject.org/atomic-desktops/silverblue/
 
 ### Features
 
-- Fedora Silverblue 44 as the base, bumped daily
+- Fedora Silverblue as the base, bumped daily
 - Signed with cosign; the system policy only accepts this image
 - Firefox RPM removed; GNOME apps and Firefox come from Flathub automatically on first boot
 - RPM Fusion repos enabled, with HEIC and video thumbnails
