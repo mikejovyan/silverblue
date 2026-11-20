@@ -73,13 +73,13 @@ jobs:
         with:
           cosign-release: v3.1.4
 
-      - name: Log in to registry for cosign
+      - name: Log in to registry
         if: forgejo.event_name != 'pull_request'
-        run: |
-          cosign login \
-            --username ${{ forgejo.repository_owner }} \
-            --password ${{ secrets.PACKAGE_TOKEN }} \
-            ${{ env.REGISTRY }}
+        uses: https://github.com/redhat-actions/podman-login@50c2d9a331bb67c8fdab99b86455fad05e2e3252 # v2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ forgejo.repository_owner }}
+          password: ${{ secrets.PACKAGE_TOKEN }}
 
       - name: Sign image
         if: forgejo.event_name != 'pull_request'
